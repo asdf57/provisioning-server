@@ -109,7 +109,8 @@ async def get_state():
 @app.post("/inventory")
 @handle_exceptions
 async def post_inventory(payload: InventoryModel):
-    inventory.add_host(payload.host, [payload.node_type], str(payload.ip), payload.mac, payload.port, payload.ansible_user)
+    groups = [payload.node_type] + payload.groups
+    inventory.add_host(payload.host, groups, payload.family, str(payload.ip), payload.mac, payload.port, payload.ansible_user)
     return JSONResponse(content={"status": "success", "message": "Updated inventory"}, status_code=200)
 
 @app.delete("/inventory")

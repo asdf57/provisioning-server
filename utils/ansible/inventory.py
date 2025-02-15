@@ -28,7 +28,7 @@ class Inventory(AnsibleObject):
         self.inventory_file = inventory_file
         self.inventory = AnsibleInventoryManager(loader=self.data_loader, sources=[str(inventory_file)])
 
-    def add_host(self, host_name: str, groups: list, ip: str, mac: str, port: int, ansible_user: str) -> None:
+    def add_host(self, host_name: str, groups: list, family: str, ip: str, mac: str, port: int, ansible_user: str) -> None:
         """
         Add a new host to the inventory. Uses the internal methods to:
           - Add the host to the default 'all' group.
@@ -49,7 +49,12 @@ class Inventory(AnsibleObject):
         host_entry.set_variable("ansible_user", ansible_user)
         host_entry.set_variable("ansible_port", port)
         host_entry.set_variable("primary_mac", mac)
-        
+
+        if family == "server":
+            groups.append("servers")
+        elif family == "router":
+            groups.append("routers")
+
         # Add host to each additional group.
         for group in groups:
             if group in ["all", "ungrouped", ""]:
@@ -162,14 +167,14 @@ class InventoryManager(AnsibleManager):
         self.repo.commit_and_push_all("Update inventory")
         logger.info("Inventory saved and changes pushed.")
 
-    def add_host(self, host_name: str, groups: list, ip: str, mac: str, port: int, ansible_user: str) -> None:
+    def add_host(self, host_name: str, groups: list, family: str, ip: str, mac: str, port: int, ansible_user: str) -> None:
         """
         Load the current inventory, delegate the host addition to the domain model,
         and save the updated inventory.
         """
         inventory = self.load()
         try:
-            inventory.add_host(host_name, groups, ip, mac, port, ansible_user)
+            inventory.add_host(host_name, groups, family, ip, mac, port, ansible_user)
             logger.info(f"Host '{host_name}' added successfully.")
         except ValueError as e:
             logger.warning(e)
