@@ -1,4 +1,4 @@
-
+import yaml
 import logging
 from pathlib import Path
 from git import Repo
@@ -6,6 +6,12 @@ from returns.result import Failure, Result, Success
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+# Data manipulation => Hostvars class
+# Reading/writing to/from files 
+# Cloning/pulling/pushing to/from git repos
+
 
 class RepoManager:
     def __init__(self, ssh_url: str, repo_path: Path):
@@ -40,7 +46,17 @@ class RepoManager:
             if self.repo.is_dirty(untracked_files=True):
                 self.repo.index.commit(commit_msg)
                 self.repo.remotes.origin.push()
-            
+            else:
+                logger.info("No changes to commit")
+
             return Success(None)
         except Exception as e:
             return Failure("Failed to commit or push changes")
+
+    def write_file(self, file_path: Path, data: dict) -> Result[None, str]:
+        try:
+            with open(file_path, "w") as f:
+                yaml.safe_dump(data, f)
+            return Success(None)
+        except Exception as e:
+            return Failure(f"Failed to write file: {e}")

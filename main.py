@@ -1,21 +1,21 @@
 import functools
 import logging
 import traceback
-from pathlib import Path
-
+import uvicorn
 import yaml
-from flask import Flask, jsonify, request
+from pathlib import Path
+from typing import List
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from returns.pipeline import is_successful
-from pydantic import BaseModel, Field, IPvAnyAddress, ValidationError
-from utils.inventory import InventoryManager
+from models.state_model import StateModel
+from utils.ansible.inventory import InventoryManager
 from utils.repo import RepoManager
-from utils.hostvars import Hostvars, HostvarType
+from utils.ansible.hostvars import HostvarType, HostvarsManager
+from utils.dict_utils import ReplacementType
 from models.inventory_model import *
 from models.storage_model import *
 from models.entry_model import *
-from dataclasses import dataclass
-
-from utils.validator import ValidationMode
 
 """Logging configuration"""
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -28,171 +28,122 @@ INVENTORY_REPO_SSH: str = "git@github.com:asdf57/inventory.git"
 HOSTVAR_REPO_PATH = REPO_DIR / "hostvar_data"
 INVENTORY_REPO_PATH = REPO_DIR / "inventory" / "inventory.yml"
 
-"""Global variables"""
 try:
-    hostvar_data_repo = RepoManager(REPO_SSH, HOSTVAR_REPO_PATH)
-    inventory_repo = RepoManager(INVENTORY_REPO_SSH, INVENTORY_REPO_PATH)
-    inventory = InventoryManager(str(INVENTORY_REPO_PATH))
-    hostvars = Hostvars(hostvar_data_repo)
+    app = FastAPI()
 except Exception as e:
     logger.error(f"Failed to initialize app: {e}")
     exit(1)
 
-class FlaskApp:
-    """Main Flask application class."""
-    def __init__(self):
-        self.app = Flask(__name__)
-        self._setup_routes()
-
-    def _setup_routes(self):
-        """Setup the routes for the application."""
-        self.app.route('/hostvars', methods=['POST'])(post_hostvars)
-        self.app.route('/state', methods=['POST'])(post_state)
-        self.app.route('/state/<host>', methods=['GET'])(get_state)
-        # self.app.route('/server', methods=['POST'])(post_server)
-        self.app.route('/inventory', methods=['POST'])(post_inventory)
-        self.app.route('/inventory', methods=['DELETE'])(delete_inventory)
-        self.app.route('/storage', methods=['POST'])(post_storage)
-        self.app.route('/storage', methods=['PUT'])(put_storage)
-
-    def run(self, host: str, port: int):
-        """Run the Flask application."""
-        self.app.run(host=host, port=port)
+"""Global variables"""
+try:
+    hostvar_data_repo = RepoManager(REPO_SSH, HOSTVAR_REPO_PATH)
+    inventory_repo = RepoManager(INVENTORY_REPO_SSH, INVENTORY_REPO_PATH)
+    inventory = InventoryManager(inventory_repo)
+    hostvars_manager = HostvarsManager(hostvar_data_repo)
+except Exception as e:
+    logger.error(f"Failed to initialize global variables: {e}")
+    exit(1)
 
 def handle_exceptions(func):
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    async def wrapper(*args, **kwargs):
         try:
-            return func(*args, **kwargs)
+            return await func(*args, **kwargs)
         except Exception as e:
             tb = traceback.format_exc()
             logger.error(f"Exception occurred: {tb}")
-            return jsonify({"status": "error", "message": str(e), "traceback": tb}), 500
+            return JSONResponse(content={"status": "error", "message": str(e), "traceback": tb}, status_code=500)
+    return wrapper
 
-def update_hostvars(data, hostvar_type: HostvarType, validation_mode: ValidationMode):
-    for host, hostvar_data in data.items():
-        res = hostvars.update_hostvars(host, hostvar_type, validation_mode, hostvar_data)
-        if not is_successful(res):
-            return jsonify({"status": "error", "message": f"Failed to update hostvars: {res.failure()}"}), 500
+async def update_hostvars(host, data, hostvar_type: HostvarType, replace_type: ReplacementType):
+    hostvars_manager.update(host, hostvar_type, replace_type, data)
+    return JSONResponse(content={"status": "success", "message": "Hostvars updated"}, status_code=200)
 
-    hostvars.save()
-
-    return jsonify({"status": "success", "message": "Hostvars updated"}), 200
-
-
-# Flask Routes
+@app.post("/hostvars/{host}")
 @handle_exceptions
-def post_hostvars():
-    return update_hostvars(request.get_json(), HostvarType.ANY, ValidationMode.ALL)
-    # data = request.get_json()
+async def post_hostvars(host: str, data: dict):
+    return await update_hostvars(host, data, HostvarType.ANY, ReplacementType.OVERRIDE)
 
-    # for host, hostvar_data in data.items():
-    #     res = hostvars.update_hostvars(host, HostvarType.ANY, ValidationMode.ALL, hostvar_data)
-    #     if not is_successful(res):
-    #         return jsonify({"status": "error", "message": f"Failed to update hostvars: {res.failure()}"}), 500
-
-    # hostvars.save()
-
-    # return jsonify({"status": "success", "message": "Hostvars updated"}), 200
-
+@app.put("/hostvars/{host}")
 @handle_exceptions
-def post_state():
-    return update_hostvars(request.get_json(), HostvarType.STATE, ValidationMode.FULL)
-    # return jsonify({"status": "success", "message": "State updated"}), 200
+async def post_hostvars(host: str, data: dict):
+    return await update_hostvars(host, data, HostvarType.ANY, ReplacementType.IN_PLACE)
 
+
+@app.get("/hostvars/{host}")
 @handle_exceptions
-def get_state(host: str):
-    state_data = hostvars.get_section(host, HostvarType.STATE)
-    if not is_successful(state_data):
-        return jsonify({"status": "error", "message": f"Failed to get state: {state_data.failure()}"}), 500
+async def get_hostvars(host: str):
+    hostvars_data = hostvars_manager.get(host)
+    return JSONResponse(content={"status": "success", "data": hostvars_data}, status_code=200)
 
-    return jsonify({"status": "success", "data": state_data}), 200
-
-# def post_server():
-#     try:
-#         data = request.get_json()
-#         parsed_data = EntryModel(**data)
-
-#         inventory_data = parsed_data.inventory.model_dump()
-#         storage_data = parsed_data.storage.model_dump()
-
-#         return jsonify({"status": "success", "message": "Server schema updated"}), 200
-#     except Exception as e:
-#         tb = traceback.format_exc()
-
+@app.get("/hostvars")
 @handle_exceptions
-def post_inventory():
-    inventory_repo.remotes.origin.pull()
-    data = request.get_json()
-    hosts = [InventoryModel(**data)] if isinstance(data, dict) else [InventoryModel(**host) for host in data]
+async def get_hostvars():
+    hostvars_data = hostvars_manager.get_all()
+    return JSONResponse(content={"status": "success", "data": hostvars_data}, status_code=200)
 
-    for host in hosts:
-        inventory.add_host(host.host, [host.node_type], str(host.ip), host.mac, host.port, host.ansible_user)
-
-    inventory.save()
-
-    if inventory_repo.is_dirty(untracked_files=True):
-        inventory_repo.git.add(".")
-        inventory_repo.index.commit("Updated inventory")
-        inventory_repo.remotes.origin.push()
-        return jsonify({"status": "success", "message": "Inventory updated"}), 200
-
-    return jsonify({"status": "success", "message": "No updates made"}), 200
-
+@app.post("/state/{host}")
 @handle_exceptions
-def delete_inventory():
-    inventory_repo.remotes.origin.pull()
-    data = request.get_json()
+async def post_state(host: str, payload: StateModel):
+    logger.info(f"payload: {payload.model_dump()}")
+    return await update_hostvars(host, payload.model_dump(), HostvarType.STATE, ReplacementType.OVERRIDE)
 
-    if not isinstance(data, list):
-        return jsonify({"status": "error", "message": "Invalid data format"}), 400
-
-    hosts = [DeleteInventoryModel(host=host) for host in data]
-
-    logger.info(f"Deleting hosts: {hosts}")
-
-    for host in hosts:
-        logger.info(f"Removing host: {host.host}")
-        inventory.remove_host(host.host)
-
-    inventory.save()
-
-    # Commit and push changes if repo is dirty
-    if inventory_repo.is_dirty(untracked_files=True):
-        inventory_repo.git.add(".")
-        inventory_repo.index.commit("Updated inventory")
-        inventory_repo.remotes.origin.push()
-        return jsonify({"status": "success", "message": "Inventory updated"}), 200
-
-    return jsonify({"status": "success", "message": "No updates made"}), 200
-
+@app.put("/state/{host}")
 @handle_exceptions
-def post_storage():
-    return update_hostvars(request.get_json(), HostvarType.STORAGE, ValidationMode.FULL)
-    # data = request.get_json()
+async def post_state(host: str, payload: StateModel):
+    logger.info(f"payload: {payload.model_dump()}")
+    return await update_hostvars(host, payload.model_dump(), HostvarType.STATE, ReplacementType.IN_PLACE)
 
-    # for host, storage_data in data.items():
-    #     res = hostvars.update_hostvars(host, HostvarType.STORAGE, ValidationMode.FULL, storage_data)
-    #     if not is_successful(res):
-    #         return jsonify({"status": "error", "message": f"Failed to update storage: {res.failure()}"}), 500
-
-    # hostvars.save()
-    # return jsonify({"status": "success", "message": "Storage schema updated"}), 200
-
+@app.get("/state/{host}")
 @handle_exceptions
-def put_storage():
-    return update_hostvars(request.get_json(), HostvarType.STORAGE, ValidationMode.PARTIAL)
-    # data = request.get_json()
+async def get_state(host: str):
+    state_data = hostvars_manager.get_section_by_host(host, HostvarType.STATE)
+    return JSONResponse(content={"status": "success", "data": state_data}, status_code=200)
 
-    # for host, storage_data in data.items():
-    #     res = hostvars.update_hostvars(host, HostvarType.STORAGE, ValidationMode.PARTIAL, storage_data)
-    #     if not is_successful(res):
-    #         return jsonify({"status": "error", "message": f"Failed to update storage: {res.failure()}"}), 500
+@app.get("/state")
+@handle_exceptions
+async def get_state():
+    state_data = hostvars_manager.get_section_by_host(host, HostvarType.STATE)
+    return JSONResponse(content={"status": "success", "data": state_data}, status_code=200)
 
-    # hostvars.save()
-    # return jsonify({"status": "success", "message": "Storage schema updated"}), 200
+@app.post("/inventory")
+@handle_exceptions
+async def post_inventory(payload: InventoryModel):
+    inventory.add_host(payload.host, [payload.node_type], str(payload.ip), payload.mac, payload.port, payload.ansible_user)
+    return JSONResponse(content={"status": "success", "message": "Updated inventory"}, status_code=200)
+
+@app.delete("/inventory")
+@handle_exceptions
+async def delete_inventory(payload: List[DeleteInventoryModel]):
+    for entry in payload:
+        logger.info(f"Removing host: {entry.host}")
+        inventory.remove_host(entry.host)
+        logger.info(f"Deleting hosts: {entry.host}")
+
+    return JSONResponse(content={"status": "success", "message": "Updated inventory"}, status_code=200)
+
+@app.get("/inventory")
+@handle_exceptions
+async def get_inventory():
+    inventory_data = inventory.load().to_dict()
+    return JSONResponse(content={"status": "success", "data": inventory_data}, status_code=200)
+
+@app.post("/storage/{host}")
+@handle_exceptions
+async def post_storage(host: str, payload: StorageModel):
+    return await update_hostvars(host, payload.model_dump(), HostvarType.STORAGE, ReplacementType.OVERRIDE)
+
+@app.put("/storage/{host}")
+@handle_exceptions
+async def put_storage(host: str, payload: PartialStorageModel):
+    return await update_hostvars(host, payload.model_dump(exclude_none=True), HostvarType.STORAGE, ReplacementType.IN_PLACE)
+
+@app.get("/storage/{host}")
+@handle_exceptions
+async def get_storage(host: str):
+    storage_data = hostvars_manager.get_section_by_host(host, HostvarType.STORAGE)
+    return JSONResponse(content={"status": "success", "data": storage_data}, status_code=200)
 
 # App Initialization
 if __name__ == '__main__':
-    app = FlaskApp()
-    app.run(host="0.0.0.0", port=3000)
+    uvicorn.run(app, host="0.0.0.0", port=3000)
