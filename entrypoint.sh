@@ -9,12 +9,6 @@ fi
 mkdir -p /root/.ssh
 
 echo "$SSH_KEY" > /root/.ssh/git_provisioning_key
-
-cat /root/.ssh/git_provisioning_key
-
 chmod 600 /root/.ssh/git_provisioning_key
-
-ls -al /root/.ssh
-
 ssh-add /root/.ssh/git_provisioning_key
 python /app/main.py
