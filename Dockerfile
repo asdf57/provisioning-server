@@ -19,4 +19,6 @@ COPY --from=build /usr/lib /usr/lib
 
 COPY . .
 
+RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
+
 ENTRYPOINT [ "/app/entrypoint.sh" ]
