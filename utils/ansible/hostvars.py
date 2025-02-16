@@ -57,6 +57,13 @@ class Hostvars(AnsibleObject):
 
         return self.data.get(host, {}).get(section.value, {})
 
+    def get_all_by_section(self, section: HostvarType) -> dict:
+        """Return a specific section of hostvars for all hosts."""
+        if section == HostvarType.ANY:
+            return self.get_all()
+
+        return {host: data.get(section.value, {}) for host, data in self.get_all().items()}
+
 
 class HostvarsManager(AnsibleManager):
     """
@@ -130,3 +137,8 @@ class HostvarsManager(AnsibleManager):
         """Reload and return a specific section of hostvars for a given host."""
         hostvars = self.load()
         return hostvars.get_section_by_host(host, section)
+
+    def get_all_by_section(self, section: HostvarType) -> dict:
+        """Reload and return a specific section of hostvars for all hosts."""
+        hostvars = self.load()
+        return hostvars.get_all_by_section(section)

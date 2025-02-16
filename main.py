@@ -103,7 +103,7 @@ async def get_state(host: str):
 @app.get("/state")
 @handle_exceptions
 async def get_state():
-    state_data = hostvars_manager.get_section_by_host(host, HostvarType.STATE)
+    state_data = hostvars_manager.get_all_by_section(HostvarType.STATE)
     return JSONResponse(content={"status": "success", "data": state_data}, status_code=200)
 
 @app.post("/inventory")
@@ -143,6 +143,12 @@ async def put_storage(host: str, payload: PartialStorageModel):
 @handle_exceptions
 async def get_storage(host: str):
     storage_data = hostvars_manager.get_section_by_host(host, HostvarType.STORAGE)
+    return JSONResponse(content={"status": "success", "data": storage_data}, status_code=200)
+
+@app.get("/storage")
+@handle_exceptions
+async def get_storage():
+    storage_data = hostvars_manager.get_all_by_section(HostvarType.STORAGE)
     return JSONResponse(content={"status": "success", "data": storage_data}, status_code=200)
 
 # App Initialization
