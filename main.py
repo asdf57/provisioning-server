@@ -151,6 +151,13 @@ async def get_storage():
     storage_data = hostvars_manager.get_all_by_section(HostvarType.STORAGE)
     return JSONResponse(content={"status": "success", "data": storage_data}, status_code=200)
 
+@app.get("/ipxe")
+@handle_exceptions
+async def get_ipxe(request: Request):
+    mac = request.query_params.get('mac')
+    logger.info(f"MAC: {mac}")
+    return JSONResponse(content={"status": "success", "data": ""}, status_code=200)
+
 # App Initialization
 if __name__ == '__main__':
     uvicorn.run(app, host="0.0.0.0", port=3000)
