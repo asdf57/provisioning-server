@@ -177,7 +177,7 @@ async def delete_entry(host: str):
     hostvars_manager.delete(host)
     return JSONResponse(content={"status": "success", "message": "Host removed"}, status_code=200)
 
-@app.get("/ipxe/")
+@app.get("/ipxe")
 @handle_exceptions
 async def get_ipxe_script(mac: str):
     """
