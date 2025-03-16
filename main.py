@@ -6,7 +6,7 @@ import yaml
 from pathlib import Path
 from typing import List
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from returns.pipeline import is_successful
 from models.state_model import StateModel
 from utils.ansible.inventory import InventoryManager
@@ -38,7 +38,7 @@ except Exception as e:
 try:
     hostvar_data_repo = RepoManager(REPO_SSH, HOSTVAR_REPO_PATH)
     inventory_repo = RepoManager(INVENTORY_REPO_SSH, INVENTORY_REPO_PATH)
-    inventory = InventoryManager(inventory_repo)
+    inventory_manager = InventoryManager(inventory_repo)
     hostvars_manager = HostvarsManager(hostvar_data_repo)
 except Exception as e:
     logger.error(f"Failed to initialize global variables: {e}")
@@ -58,6 +58,15 @@ def handle_exceptions(func):
 async def update_hostvars(host, data, hostvar_type: HostvarType, replace_type: ReplacementType):
     hostvars_manager.update(host, hostvar_type, replace_type, data)
     return JSONResponse(content={"status": "success", "message": "Hostvars updated"}, status_code=200)
+
+async def init_host(payload: EntryModel):
+    inventory = payload.inventory
+    storage = payload.storage
+
+    inventory_manager.add_host(inventory.host, [inventory.node_type] + inventory.groups, inventory.family, str(inventory.ip), inventory.mac, inventory.port, inventory.ansible_user)
+    hostvars_manager.create(inventory.host, storage)
+
+    return JSONResponse(content={"status": "success", "message": "Host initialized"}, status_code=200)
 
 @app.post("/hostvars/{host}")
 @handle_exceptions
@@ -110,7 +119,7 @@ async def get_state():
 @handle_exceptions
 async def post_inventory(payload: InventoryModel):
     groups = [payload.node_type] + payload.groups
-    inventory.add_host(payload.host, groups, payload.family, str(payload.ip), payload.mac, payload.port, payload.ansible_user)
+    inventory_manager.add_host(payload.host, groups, payload.family, str(payload.ip), payload.mac, payload.port, payload.ansible_user)
     return JSONResponse(content={"status": "success", "message": "Updated inventory"}, status_code=200)
 
 @app.delete("/inventory")
@@ -118,7 +127,7 @@ async def post_inventory(payload: InventoryModel):
 async def delete_inventory(payload: List[DeleteInventoryModel]):
     for entry in payload:
         logger.info(f"Removing host: {entry.host}")
-        inventory.remove_host(entry.host)
+        inventory_manager.remove_host(entry.host)
         logger.info(f"Deleting hosts: {entry.host}")
 
     return JSONResponse(content={"status": "success", "message": "Updated inventory"}, status_code=200)
@@ -126,7 +135,7 @@ async def delete_inventory(payload: List[DeleteInventoryModel]):
 @app.get("/inventory")
 @handle_exceptions
 async def get_inventory():
-    inventory_data = inventory.load().to_dict()
+    inventory_data = inventory_manager.load().to_dict()
     return JSONResponse(content={"status": "success", "data": inventory_data}, status_code=200)
 
 @app.post("/storage/{host}")
@@ -151,12 +160,37 @@ async def get_storage():
     storage_data = hostvars_manager.get_all_by_section(HostvarType.STORAGE)
     return JSONResponse(content={"status": "success", "data": storage_data}, status_code=200)
 
-@app.get("/ipxe")
+@app.post("/entry")
 @handle_exceptions
-async def get_ipxe(request: Request):
-    mac = request.query_params.get('mac')
-    logger.info(f"MAC: {mac}")
-    return JSONResponse(content={"status": "success", "data": ""}, status_code=200)
+async def post_init(payload: EntryModel):
+    inventory = payload.inventory
+    storage = payload.storage
+    system  = payload.system
+    inventory_manager.add_host(inventory.host, [inventory.node_type] + inventory.groups, inventory.family, str(inventory.ip), inventory.mac, inventory.port, inventory.ansible_user)
+    hostvars_manager.create(inventory.host, storage, system)
+    return JSONResponse(content={"status": "success", "message": "Host initialized"}, status_code=200)
+
+@app.delete("/entry/{host}")
+@handle_exceptions
+async def delete_entry(host: str):
+    inventory_manager.remove_host(host)
+    hostvars_manager.delete(host)
+    return JSONResponse(content={"status": "success", "message": "Host removed"}, status_code=200)
+
+@app.get("/ipxe/{mac}")
+@handle_exceptions
+async def get_ipxe_script(mac: str):
+    """
+    Returns a plaintext response of the os to iPXE boot to
+    """
+    host = inventory_manager.get_host_by_mac(mac)
+    if not host:
+        return PlainTextResponse(content="Host not found", status_code=404)
+    hostvars = hostvars_manager.get(host.name)
+    if not hostvars:
+        return PlainTextResponse(content="Hostvars not found", status_code=404)
+
+    return PlainTextResponse(content=str(hostvars['system']['os']), status_code=200)
 
 # App Initialization
 if __name__ == '__main__':

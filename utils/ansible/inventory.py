@@ -209,3 +209,14 @@ class InventoryManager(AnsibleManager):
             logger.warning(e)
             return
         self.save(inventory)
+
+    def get_host_by_mac(self, mac: str) -> str:
+        """
+        Load the current inventory and return the host name associated with the given MAC address.
+        """
+        inventory = self.load()
+        inventory.inventory.refresh_inventory()
+        for host in inventory.inventory.get_hosts():
+            if host.vars.get("primary_mac") == mac:
+                return host
+        return None

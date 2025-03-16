@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 import yaml
 import logging
+from models.state_model import StateModel
+from models.storage_model import StorageModel
+from models.system_model import SystemModel
 from utils.ansible.manager import AnsibleManager, AnsibleObject
 from utils.repo import RepoManager
 from utils.dict_utils import ReplacementType, deep_merge
@@ -14,6 +17,7 @@ logger = logging.getLogger(__name__)
 class HostvarType(Enum):
     STATE = "state"
     STORAGE = "storage"
+    SYSTEM = "system"
     ANY = "any"
 
 class Hostvars(AnsibleObject):
@@ -88,7 +92,7 @@ class HostvarsManager(AnsibleManager):
         logger.debug("Refreshed hostvars from repo.")
         return Hostvars(hostvars_data)
 
-    def save(self, hostvars: Hostvars) -> None:
+    def save(self, hostvars: Hostvars, commit_msg:str = "Update hostvars", batch_updates: bool = False) -> None:
         """
         Save all hostvars back to the repository and push changes.
         This method writes the updated data back to disk and commits it.
@@ -103,10 +107,41 @@ class HostvarsManager(AnsibleManager):
                 logger.error(f"Error saving {hostvar_file}: {e}")
                 raise
 
-        self.repo.commit_and_push_all("Update hostvars")
+        if batch_updates:
+            return
+
+        self.repo.commit_and_push_all(commit_msg)
         logger.debug("Committed and pushed all hostvars changes.")
 
-    def update(self, host: str, var_type: HostvarType, replace_type: ReplacementType, new_data: dict) -> None:
+    def create(self, host: str, storage: StorageModel, system: SystemModel) -> None:
+        """Create a new hostvars file for a given host."""
+        hostvar_file = self.repo.repo_path / f"{host}.yml"
+        if hostvar_file.exists():
+            logger.warning(f"Hostvars file for '{host}' already exists.")
+            return
+
+        # Initialize state with all fields
+        self.update(host, HostvarType.SYSTEM, ReplacementType.OVERRIDE, system.model_dump(), batch_updates=True)
+        self.update(host, HostvarType.STATE, ReplacementType.OVERRIDE, StateModel().model_dump(), batch_updates=True)
+        self.update(host, HostvarType.STORAGE, ReplacementType.OVERRIDE, storage.model_dump(), commit_msg="Create data", batch_updates=False)
+
+    def delete(self, host: str) -> None:
+        """Delete the hostvars file for a given host."""
+        hostvar_file = self.repo.repo_path / f"{host}.yml"
+        if not hostvar_file.exists():
+            logger.warning(f"Hostvars file for '{host}' does not exist.")
+            return
+
+        try:
+            hostvar_file.unlink()
+            logger.debug(f"Deleted hostvars file for '{host}'.")
+        except Exception as e:
+            logger.error(f"Error deleting {hostvar_file}: {e}")
+            raise
+
+        self.repo.commit_and_push_all("Delete hostvars")
+
+    def update(self, host: str, var_type: HostvarType, replace_type: ReplacementType, new_data: dict, commit_msg:str = "Update hostvars", batch_updates: bool = False) -> None:
         """
         Reload the latest hostvars, update the data, and then save.
         This minimizes the risk of working with outdated data.
@@ -121,7 +156,7 @@ class HostvarsManager(AnsibleManager):
             raise
 
         # Save updated hostvars
-        self.save(hostvars)
+        self.save(hostvars, commit_msg, batch_updates)
 
     def get(self, host: str) -> dict:
         """Reload and return hostvars for a specific host."""
