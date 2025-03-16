@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from returns.pipeline import is_successful
 from models.state_model import StateModel
+from models.system_model import SystemModel, PartialSystemModel
 from utils.ansible.inventory import InventoryManager
 from utils.repo import RepoManager
 from utils.ansible.hostvars import HostvarType, HostvarsManager
@@ -160,6 +161,28 @@ async def get_storage():
     storage_data = hostvars_manager.get_all_by_section(HostvarType.STORAGE)
     return JSONResponse(content={"status": "success", "data": storage_data}, status_code=200)
 
+@app.post("/system/{host}")
+@handle_exceptions
+async def post_system(host: str, payload: SystemModel):
+    return await update_hostvars(host, payload.model_dump(), HostvarType.SYSTEM, ReplacementType.OVERRIDE)
+
+@app.put("/system/{host}")
+@handle_exceptions
+async def put_system(host: str, payload: PartialSystemModel):
+    return await update_hostvars(host, payload.model_dump(exclude_none=True), HostvarType.SYSTEM, ReplacementType.IN_PLACE)
+
+@app.get("/system/{host}")
+@handle_exceptions
+async def get_system(host: str):
+    data = hostvars_manager.get_section_by_host(host, HostvarType.SYSTEM)
+    return JSONResponse(content={"status": "success", "data": data}, status_code=200)
+
+@app.get("/system")
+@handle_exceptions
+async def get_system():
+    storage_data = hostvars_manager.get_all_by_section(HostvarType.SYSTEM)
+    return JSONResponse(content={"status": "success", "data": storage_data}, status_code=200)
+
 @app.post("/entry")
 @handle_exceptions
 async def post_init(payload: EntryModel):
@@ -177,7 +200,7 @@ async def delete_entry(host: str):
     hostvars_manager.delete(host)
     return JSONResponse(content={"status": "success", "message": "Host removed"}, status_code=200)
 
-@app.get("/ipxe")
+@app.get("/ipxe/{mac}")
 @handle_exceptions
 async def get_ipxe_script(mac: str):
     """
