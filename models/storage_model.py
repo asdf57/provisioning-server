@@ -1,8 +1,6 @@
-import yaml
-from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing_extensions import Annotated
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Union
 from models.optional_model import OptionalModel
 
 VALID_PARTITION_TYPE = Literal["primary", "logical", "extended"]
@@ -13,21 +11,19 @@ VALID_FS_TYPES = Literal[
 ]
 VALID_FLAGS = Literal["boot", "esp", "swap", "raid", "lvm", "noauto", "hidden"]
 
-PartitionPercentage = Annotated[
-    float,
-    Field(
-        gt=0.0,
-        le=100.0,
-        description="Percentage of disk space to allocate to the partition (precision of 2 decimal places)"
-    )
+VALID_ALLOCATORS = Literal[
+    "percentage", "size"
 ]
 
 class PartitionModel(BaseModel):
     partition_type: VALID_PARTITION_TYPE = Field(
         description="Type of partition (primary, logical, or extended)"
     )
-    percentage: PartitionPercentage = Field(
-        description="Percentage of disk space to allocate to the partition (precision of 2 decimal places)"
+    alloc_type: VALID_ALLOCATORS = Field(
+        description="Type of allocator for the partition size (percentage, size)"
+    )
+    size: int = Field(
+        description="Size of the partition (percentage or size in MiB)"
     )
     fs_type: Optional[VALID_FS_TYPES] = Field(
         default=None,
@@ -37,35 +33,29 @@ class PartitionModel(BaseModel):
         default_factory=list,
         description="Flags for the partition"
     )
-
-    @field_validator("percentage")
-    @classmethod
-    def validate_percentage(cls, v):
-        # Convert to string to analyze the decimal part
-        str_value = str(v)
-
-        # Check if there's a decimal point in the string
-        if '.' not in str_value:
-            raise ValueError("Percentage must have exactly two decimal places")
-
-        # Split by decimal point and check the length of the decimal part
-        integer_part, decimal_part = str_value.split('.')
-
-        # Validate that there are exactly 2 decimal places
-        if len(decimal_part) > 2:
-            raise ValueError("Percentage must have exactly two decimal places or less")
-
-        # Return the float value (which is already properly formatted)
-        return float(str_value)
     
     @field_validator("fs_type")
     @classmethod
     def validate_fs_type(cls, v, info):
         partition_type = info.data.get("partition_type")
+
         if partition_type == 'extended' and v is not None:
             raise ValueError("Extended partitions cannot have a filesystem")
         if partition_type != 'extended' and v is None:
             raise ValueError(f"{partition_type} partitions must have a filesystem")
+
+        return v
+    
+    @field_validator("size")
+    @classmethod
+    def validate_size(cls, v, info):
+        alloc_type = info.data.get("alloc_type")
+
+        if alloc_type == "percentage" and not (0 <= v <= 100):
+            raise ValueError("Percentage size must be between 0 and 100")
+        elif alloc_type == "size" and v <= 0:
+            raise ValueError("Size must be greater than 0 for size allocation")
+
         return v
 
 class StorageModel(BaseModel):
@@ -74,15 +64,21 @@ class StorageModel(BaseModel):
         default_factory=list,
         description="List of partitions to create on the disk"
     )
-    
+
     @model_validator(mode="after")
     def validate_partitions(self):
         if not self.partitions:
             raise ValueError("At least one partition must be defined")
-        # Ensure total percentage does not exceed 100%
-        total_percentage = sum([partition.percentage for partition in self.partitions])
-        if total_percentage > 100:
-            raise ValueError(f"Total percentage of partitions exceeds 100%: {total_percentage}")
+
+        percentage_sum = 0
+
+        for partition in self.partitions:
+            if partition.alloc_type == "percentage":
+                percentage_sum += partition.size
+
+        if percentage_sum > 100:
+            raise ValueError(f"Total percentage of partition(s) exceeds 100%: {percentage_sum}")
+
         return self
 
 class PartialStorageModel(StorageModel, OptionalModel):
